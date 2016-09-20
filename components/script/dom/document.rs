@@ -90,9 +90,6 @@ use dom::window::{ReflowReason, Window};
 use encoding::EncodingRef;
 use encoding::all::UTF_8;
 use euclid::point::Point2D;
-use html5ever::serialize;
-use html5ever::serialize::SerializeOpts;
-use html5ever::serialize::TraversalScope::ChildrenOnly;
 use html5ever::tree_builder::{LimitedQuirks, NoQuirks, Quirks, QuirksMode};
 use html5ever_atoms::{LocalName, QualName};
 use ipc_channel::ipc::{self, IpcSender};
@@ -2018,16 +2015,6 @@ impl Document {
         self.window.reflow(ReflowGoal::ForDisplay,
                            ReflowQueryType::NoQuery,
                            ReflowReason::ElementStateChanged);
-    }
-
-    pub fn serialize(&self) -> Fallible<DOMString> {
-        let mut writer = vec![];
-        if let Ok(()) = serialize(&mut writer, &self.upcast::<Node>(),
-            SerializeOpts { traversal_scope: ChildrenOnly, ..Default::default() }) {
-            Ok(DOMString::from(String::from_utf8(writer).unwrap()))
-        } else {
-            Err(Error::InvalidState)
-        }
     }
 }
 
