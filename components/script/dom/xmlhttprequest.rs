@@ -8,7 +8,7 @@ use dom::bindings::codegen::Bindings::BlobBinding::BlobMethods;
 use dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
 use dom::bindings::codegen::Bindings::EventHandlerBinding::EventHandlerNonNull;
 use dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
-use dom::bindings::codegen::Bindings::XMLHttpRequestBinding;
+use dom::bindings::codegen::Bindings::XMLHttpRequestBinding::{self, BodyInit};
 use dom::bindings::codegen::Bindings::XMLHttpRequestBinding::XMLHttpRequestMethods;
 use dom::bindings::codegen::Bindings::XMLHttpRequestBinding::XMLHttpRequestResponseType;
 use dom::bindings::codegen::UnionTypes::DocumentOrBodyInit;
@@ -519,7 +519,48 @@ impl XMLHttpRequestMethods for XMLHttpRequest {
             _ => data
         };
         // Step 4 (first half)
-        let extracted = data.as_ref().map(|d| d.extract());
+        // let extracted = data.as_ref().map(|d| d.extract());
+        let extracted = match data {
+            Some(DocumentOrBodyInit::Document(ref d)) => {
+                let data: Vec<u8> = serialize_document(d).unwrap().into();
+                let decoded_data: Vec<u8> = match &*d.CharacterSet() {
+                    "UTF-8" => {
+                        debug!("Document is already utf-8, skipping conversion {:?}", d.url());
+                        data
+                    },
+                    document_charset => {
+                        debug!("Document is {:?} we have to decode", document_charset);
+                        let charset = encoding_from_whatwg_label(&*d.CharacterSet()).unwrap_or(UTF_8);
+                        charset.decode(&*data, DecoderTrap::Replace).unwrap().into_bytes()
+                    }
+                };
+                let mut content_type = String::new();
+                if d.is_html_document() {
+                    content_type.push_str("text/html");
+                } else {
+                    content_type.push_str("application/xml");
+                };
+                content_type.push_str(";charset=UTF-8");
+                Some((decoded_data, Some(DOMString::from(content_type))))
+            },
+            Some(DocumentOrBodyInit::Blob(blob)) => {
+                let blob = BodyInit::Blob(blob);
+                Some(blob.extract())
+            },
+            Some(DocumentOrBodyInit::FormData(form_data)) => {
+                let form_data = BodyInit::FormData(form_data);
+                Some(form_data.extract())
+            },
+            Some(DocumentOrBodyInit::String(string)) => {
+                let string = BodyInit::String(string);
+                Some(string.extract())
+            },
+            Some(DocumentOrBodyInit::URLSearchParams(usp)) => {
+                let usp = BodyInit::URLSearchParams(usp);
+                Some(usp.extract())
+            },
+            _ => None
+        };
 
         self.request_body_len.set(extracted.as_ref().map_or(0, |e| e.0.len()));
 
@@ -1370,21 +1411,21 @@ pub trait Extractable {
     fn extract(&self) -> (Vec<u8>, Option<DOMString>);
 }
 
-impl Extractable for DocumentOrBodyInit {
+impl Extractable for BodyInit {
     // https://fetch.spec.whatwg.org/#concept-bodyinit-extract
     fn extract(&self) -> (Vec<u8>, Option<DOMString>) {
         match *self {
-            DocumentOrBodyInit::String(ref s) => {
+            BodyInit::String(ref s) => {
                 let encoding = UTF_8 as EncodingRef;
                 (encoding.encode(s, EncoderTrap::Replace).unwrap(),
                     Some(DOMString::from("text/plain;charset=UTF-8")))
             }
-            DocumentOrBodyInit::URLSearchParams(ref usp) => {
+            BodyInit::URLSearchParams(ref usp) => {
                 // Default encoding is UTF-8.
                 (usp.serialize(None).into_bytes(),
                     Some(DOMString::from("application/x-www-form-urlencoded;charset=UTF-8")))
             }
-            DocumentOrBodyInit::Blob(ref b) => {
+            BodyInit::Blob(ref b) => {
                 let content_type = if b.Type().as_ref().is_empty() {
                     None
                 } else {
@@ -1393,33 +1434,11 @@ impl Extractable for DocumentOrBodyInit {
                 let bytes = b.get_bytes().unwrap_or(vec![]);
                 (bytes, content_type)
             }
-            DocumentOrBodyInit::FormData(ref formdata) => {
+            BodyInit::FormData(ref formdata) => {
                 let boundary = generate_boundary();
                 let bytes = encode_multipart_form_data(&mut formdata.datums(), boundary.clone(),
                                                        UTF_8 as EncodingRef);
                 (bytes, Some(DOMString::from(format!("multipart/form-data;boundary={}", boundary))))
-            },
-            DocumentOrBodyInit::Document(ref d) => {
-                let data: Vec<u8> = serialize_document(d).unwrap().into();
-                let decoded_data: Vec<u8> = match &*d.CharacterSet() {
-                    "UTF-8" => {
-                        debug!("Document is already utf-8, skipping conversion {:?}", d.url());
-                        data
-                    },
-                    document_charset => {
-                        debug!("Document is {:?} we have to decode", document_charset);
-                        let charset = encoding_from_whatwg_label(&*d.CharacterSet()).unwrap_or(UTF_8);
-                        charset.decode(&*data, DecoderTrap::Replace).unwrap().into_bytes()
-                    }
-                };
-                let mut content_type = String::new();
-                if d.is_html_document() {
-                    content_type.push_str("text/html");
-                } else {
-                    content_type.push_str("application/xml");
-                };
-                content_type.push_str(";charset=UTF-8");
-                (decoded_data, Some(DOMString::from(content_type)))
             }
         }
     }
